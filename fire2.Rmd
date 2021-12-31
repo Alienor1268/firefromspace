@@ -1,0 +1,436 @@
+---
+title: "fire2"
+output: html_document
+---
+
+
+Data: https://www.kaggle.com/carlosparadis/fires-from-space-australia-and-new-zeland?select=fire_archive_M6_96619.csv
+
+https://earthdata.nasa.gov/earth-observation-data/near-real-time/firms/c6-mcd14dl 
+
+#FEATURES
+
+Latitude: Center of 1km fire pixel but not necessarily the actual location of the fire as one or more fires can be detected within the 1km pixel.
+
+Longitude: Center of 1km fire pixel but not necessarily the actual location of the fire as one or more fires can be detected within the 1km pixel.
+
+Brightness: Brightness temperature 21 (Kelvin): Channel 21/22 brightness temperature of the fire pixel measured in Kelvin.
+
+Scan: Along Scan pixel size: The algorithm produces 1km fire pixels but MODIS pixels get bigger toward the edge of scan. Scan and track reflect actual pixel size.
+
+track: Along Track pixel size: The algorithm produces 1km fire pixels but MODIS pixels get bigger toward the edge of scan. Scan and track reflect actual pixel size.
+
+acq_date: Acquisition Date: Date of MODIS acquisition.
+
+acq_time: Acquisition Time: Time of acquisition/overpass of the satellite (in UTC).
+
+Satellite: A = Aqua and T = Terra.
+
+Instrument: Constant value for MODIS. 
+
+Confidence (0-100%): This value is based on a collection of intermediate algorithm quantities used in the detection process. It is intended to help users gauge the quality of individual hotspot/fire pixels. Confidence estimates range between 0 and 100% and are assigned one of the three fire classes (low-confidence fire, nominal-confidence fire, or high-confidence fire).
+
+Version (Collection and source): Version identifies the collection (e.g. MODIS Collection 6) and source of data processing: Near Real-Time (NRT suffix added to collection) or Standard Processing (collection only).
+"6.0NRT" - Collection 6 NRT processing. "6.1NRT" - Collection 61 NRT processing
+"6.0" - Collection 6 Standard processing. "6.1" - Collection 61 Standard processing
+
+Brightness temperature 31 (Kelvin): Channel 31 brightness temperature of the fire pixel measured in Kelvin.
+
+Fire Radiative Power (MW - megawatts): Depicts the pixel-integrated fire radiative power in MW (megawatts).
+
+Type*
+0 = presumed vegetation fire
+1 = active volcano
+2 = other static land source
+3 = offshore
+*This attribute is only available for MCD14ML (standard quality) data 
+
+
+
+```{r, echo=FALSE,  message=FALSE }
+library(sf)
+library(mapview)
+library(ggplot2)
+library(readr)
+library(tidymodels)
+library(dplyr)
+```
+
+
+```{r, echo=FALSE}
+fire_dataset <- read.csv("./fire_archive_M6_96619.csv")
+```
+
+
+# MAP OF THE FIRES IN AUSTRALIA
+```{r, echo=FALSE}
+
+plot <- st_as_sf(fire_dataset, coords = c("longitude", "latitude"),  crs = 4326)
+mapview(plot)
+
+```
+
+
+# PLOT THE OUTPUT VARIABLE
+
+```{r, echo=FALSE}
+
+fire_dataset %>%
+  ggplot( aes(x=brightness)) +
+    geom_density(fill="brown3", color="brown3", alpha=0.8)
+
+
+mean_brg <- mean(fire_dataset$brightness)
+median_brg <- median(fire_dataset$brightness)
+min_brg <- min(fire_dataset$brightness)
+max_brg <-  max(fire_dataset$brightness)
+
+library(gt)
+brg_tbl <- tibble(
+    mean_brg,
+    median_brg,
+    min_brg,
+    max_brg
+  ) 
+
+gt_tbl <- gt(data = brg_tbl)
+gt_tbl
+```
+
+# Transform as date
+
+```{r, echo=FALSE}
+
+fire <- fire_dataset %>% mutate(acq_date = as.Date(acq_date, format = "%Y-%m-%d"),
+                       satellite = as.factor(satellite),
+                       instrument = as.factor(instrument),
+                       daynight = as.factor(daynight)
+                       )
+
+```
+
+
+
+
+# no missing values
+
+```{r, echo=FALSE}
+library(naniar)
+vis_miss(fire)
+```
+
+```{r}
+str(fire)
+```
+
+
+# correlation plot
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(PerformanceAnalytics)
+mydata <- fire[, c(-6,-8,-9, -14)]
+chart.Correlation(mydata, histogram=TRUE, pch=19)
+#http://www.sthda.com/french/wiki/matrice-de-correlation-guide-simple-pour-analyser-formater-et-visualiser
+```
+The variables scan and Track are highly correlated with 0,98.
+bright_t31 and brightness are strong correlated. 
+frp and brightness are highly correlated to brightness.
+
+
+# PLOT BRIGHTNESS ACCORDING TO ACQUISITION DATE DISTINCTION BETWEEN DAY AND NIGHT
+```{r}
+ggplot(fire, aes(x = acq_date, y = brightness))+
+  geom_point(aes(color = daynight, shape = daynight)) +
+   scale_color_manual(values=c("darkorange2", "aquamarine4"))
+  
+```
+
+# CHANGE TIME??
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+ggplot(fire, aes(x = acq_time, y = brightness))+
+  geom_point(aes(color = daynight, shape = daynight)) +
+   scale_color_manual(values=c("firebrick1", "darkcyan")) +
+   facet_wrap(~ satellite)
+
+```
+
+#  DEAL WITH TIME - many NAs? 
+
+```{r}
+
+format(strptime(fire$acq_time, format="%H%M"), format = "%H:%M")
+
+```
+
+
+
+# PLOT BRIGHTNESS ACCORDING DAY OR NIGHT FACTOR, COLORS ARE REPRESENTING THE DIFFERENT SATELLITES
+
+```{r}
+library(gganimate)
+p_1 <- ggplot(
+  fire, 
+  aes(x = scan, y = brightness , colour = satellite)
+  ) +
+  geom_point(show.legend = FALSE, alpha = 0.7) +
+  scale_color_viridis_d() +
+  scale_size(range = c(0, 1)) +
+  scale_x_log10() +
+  labs(x = "Day or night ", y = "brightness")
+
+p_1  + transition_time(acq_date) + ggtitle('Eathquake magnitude type defined per Magnitude and per year ',
+          subtitle = 'acq_date: {frame_time}')
+
+```
+
+```{r}
+str(fire)
+```
+
+
+
+# fACED WRAP ACCORDING TYPE 
+
+```{r}
+
+ggplot(fire, aes(x = scan, y = brightness))+
+  geom_point(aes(color = daynight, shape = daynight)) +
+  scale_color_manual(values=c("brown1", "darkorchid4")) +
+   facet_wrap(~ type)
+
+```
+
+
+
+
+```{r, echo=FALSE}
+fire_offshore <- filter(fire, type == 3)
+plots_offshore <- st_as_sf(fire_offshore, coords = c("longitude", "latitude"),  crs = 4326)
+mapview(plots_offshore)
+
+```
+
+
+```{r, echo=FALSE}
+fire_land <- filter(fire, type == 2)
+plots_land <- st_as_sf(fire_land, coords = c("longitude", "latitude"),  crs = 4326)
+mapview(plots_land)
+
+```
+
+```{r}
+str(fire)
+```
+
+
+#PLOT Brightness temperature 31 (Kelvin) according to track
+
+```{r}
+p_2 <- ggplot(
+  fire, 
+  aes(x = track, y = frp , colour = type)
+  ) +
+  geom_point(show.legend = TRUE, alpha = 0.7) +
+  scale_color_viridis_b (option = "magma") +
+  scale_size(range = c(0, 1)) +
+  scale_x_log10() +
+  labs( x = 'track', y = 'bright_t31')
+
+
+
+p_2 + transition_time(brightness) + ggtitle(' Brightness temperature 31 (Kelvin) according to track',
+          subtitle = 'brightness: {frame_time}')
+
+
+```
+
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+library(plotly)
+fig <- plot_ly(fire, x = ~acq_date, y = ~frp, z = ~scan, 
+               color = ~satellite, # define color on param
+               colors = c('cornflowerblue', 'goldenrod1'))
+fig <- fig %>% add_markers()
+fig <- fig %>% layout(scene = list(xaxis = list(title = 'Date'),
+                     yaxis = list(title = 'frp'),
+                     zaxis = list(title = 'scan')))
+
+fig
+
+#https://jtr13.github.io/cc21/d-plot-in-r.html
+
+```
+
+
+
+
+
+
+
+
+
+
+# DATASET NUMERIC
+
+```{r}
+fire_num <- fire %>% mutate(acq_date = as.numeric(acq_date),
+                       acq_time = as.numeric(acq_time),
+                       satellite = as.numeric(satellite),
+                       confidence = as.numeric(confidence),
+                       daynight = as.numeric(daynight),
+                       type = as.numeric(type)
+
+                       )
+```
+
+
+
+```{r}
+str(fire_num)
+```
+
+#WE REMOVE INSTRUMENT (ONLY 1 ELEMENT), CONFIDENCE (ALREADY PREPROCESSED), VERSION, 
+
+```{r}
+fire_small = select(fire_num,-9, -10, -11, -15)
+str(fire_small)
+```
+
+
+# TRAINING RANDOM FOREST
+
+# SPLIT THE DATASET
+```{r}
+set.seed(123)
+trees_split <- initial_split(fire_small, strata = brightness)
+trees_train <- training(trees_split)
+trees_test <- testing(trees_split)
+```
+
+# create RECIPE
+```{r}
+tree_rec <- recipe( brightness ~ . , data=trees_train) %>%
+  step_center(all_predictors()) %>%
+  step_scale(all_predictors())
+
+```
+
+
+
+```{r}
+nn_model <- rand_forest(trees = 10) %>%
+  set_engine("ranger") %>%
+  set_mode("regression")
+
+nn_wf <- workflow() %>%
+  add_recipe(tree_rec) %>%
+  add_model(nn_model)
+
+nn_fit <- nn_wf %>%
+  fit(trees_train)
+```
+
+
+
+
+
+```{r}
+tune_spec <- rand_forest(
+  mtry = tune(),
+  trees = 1000,
+  min_n = tune()
+) %>%
+  set_mode("regression") %>%
+  set_engine("ranger")
+```
+
+
+
+```{r}
+tune_wf <- workflow() %>%
+  add_recipe(tree_rec) %>%
+  add_model(tune_spec)
+```
+
+
+```{r}
+set.seed(234)
+trees_folds <- vfold_cv(trees_train)
+```
+
+
+
+```{r}
+set.seed(345)
+tune_res <- tune_grid(
+  tune_wf,
+  resamples = trees_folds,
+  grid = 20
+)
+
+tune_res
+```
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+
+set.seed(1234)
+SP_split <- initial_split(fire_small, prop = 0.7)
+
+SP_train <- training(SP_split)
+SP_test <- testing(SP_split)
+
+SP_rec <- recipe( brightness ~ . , data=SP_train) %>%
+  step_center(all_predictors()) %>%
+  step_scale(all_predictors())
+
+```
+
+
+
+```{r}
+model_rf <- rand_forest(mtry = tune(),trees = 100, min_n = tune()) %>%
+  set_mode("regression") %>%
+  set_engine("ranger")
+
+rf_wf <- workflow() %>%
+  add_recipe(SP_rec) %>%
+  add_model(model_rf)
+
+```
+
+
+We train a first random forest algorithm with a grid = 10, no tuning parameter and a 5 fold cross validation.
+
+```{r, message=FALSE}
+set.seed(1234)
+nfl_folds <- vfold_cv(SP_train, v = 5, strata = brightness)
+
+
+set.seed(1234)
+rf <- tune_grid(
+  rf_wf,
+  resamples = nfl_folds,
+  grid = 10
+)
+
+
+rf %>%
+  collect_metrics() %>%
+  filter(.metric == "rmse") 
+
+```
