@@ -54,6 +54,8 @@ library(ggplot2)
 library(readr)
 library(tidymodels)
 library(dplyr)
+library(caret)
+
 ```
 
 
@@ -76,21 +78,21 @@ mapview(plot)
 ```{r, echo=FALSE}
 
 fire_dataset %>%
-  ggplot( aes(x=brightness)) +
+  ggplot( aes(x=frp)) +
     geom_density(fill="brown3", color="brown3", alpha=0.8)
 
 
-mean_brg <- mean(fire_dataset$brightness)
-median_brg <- median(fire_dataset$brightness)
-min_brg <- min(fire_dataset$brightness)
-max_brg <-  max(fire_dataset$brightness)
+mean_frp <- mean(fire_dataset$frp)
+median_frp <- median(fire_dataset$frp)
+min_frp <- min(fire_dataset$frp)
+max_frp <-  max(fire_dataset$frp)
 
 library(gt)
 brg_tbl <- tibble(
-    mean_brg,
-    median_brg,
-    min_brg,
-    max_brg
+    mean_frp,
+    median_frp,
+    min_frp,
+    max_frp
   ) 
 
 gt_tbl <- gt(data = brg_tbl)
@@ -119,9 +121,6 @@ library(naniar)
 vis_miss(fire)
 ```
 
-```{r}
-str(fire)
-```
 
 
 # correlation plot
@@ -157,14 +156,6 @@ ggplot(fire, aes(x = acq_time, y = brightness))+
 
 ```
 
-#  DEAL WITH TIME - many NAs? 
-
-```{r}
-
-format(strptime(fire$acq_time, format="%H%M"), format = "%H:%M")
-
-```
-
 
 
 # PLOT BRIGHTNESS ACCORDING DAY OR NIGHT FACTOR, COLORS ARE REPRESENTING THE DIFFERENT SATELLITES
@@ -186,10 +177,6 @@ p_1  + transition_time(acq_date) + ggtitle('Eathquake magnitude type defined per
 
 ```
 
-```{r}
-str(fire)
-```
-
 
 
 # fACED WRAP ACCORDING TYPE 
@@ -204,7 +191,7 @@ ggplot(fire, aes(x = scan, y = brightness))+
 ```
 
 
-
+# PLOT OFFSHORE TYPE WILDFIRES
 
 ```{r, echo=FALSE}
 fire_offshore <- filter(fire, type == 3)
@@ -214,15 +201,12 @@ mapview(plots_offshore)
 ```
 
 
+# PLOT LAND TYPE WILDFIRE
 ```{r, echo=FALSE}
 fire_land <- filter(fire, type == 2)
 plots_land <- st_as_sf(fire_land, coords = c("longitude", "latitude"),  crs = 4326)
 mapview(plots_land)
 
-```
-
-```{r}
-str(fire)
 ```
 
 
@@ -272,108 +256,64 @@ fig
 
 
 
-
-
-
-# DATASET NUMERIC
-
+# remove instrument, version (just one value) and confidence
 ```{r}
-fire_num <- fire %>% mutate(acq_date = as.numeric(acq_date),
-                       acq_time = as.numeric(acq_time),
-                       satellite = as.numeric(satellite),
-                       confidence = as.numeric(confidence),
-                       daynight = as.numeric(daynight),
-                       type = as.numeric(type)
-
-                       )
+fire_modelling = select(fire, -9, -10, -11)
+str(fire_modelling)
 ```
 
 
-
+# split dataset using caret library
 ```{r}
-str(fire_num)
+uin = 123456789
+set.seed(uin)
+fi_split = initial_split(fire_modelling, p = 0.6, list = FALSE)
+fi_trn = fi_split %>% training()
+fi_tst = fi_split %>% testing()
 ```
 
-#WE REMOVE INSTRUMENT (ONLY 1 ELEMENT), CONFIDENCE (ALREADY PREPROCESSED), VERSION, 
 
+# grid for tuning 
 ```{r}
-fire_small = select(fire_num,-9, -10, -11, -15)
-str(fire_small)
+gbm_fi_grid = expand_grid(interaction.depth = c(1, 2),
+                       n.trees = c(500, 1000, 1500),
+                       shrinkage = c(0.001, 0.01, 0.1),
+                       n.minobsinnode = 10)
 ```
 
-
-# TRAINING RANDOM FOREST
-
-# SPLIT THE DATASET
+# cross validation 
 ```{r}
-set.seed(123)
-trees_split <- initial_split(fire_small, strata = brightness)
-trees_train <- training(trees_split)
-trees_test <- testing(trees_split)
+set.seed(uin)
+cv_5 = trainControl(method = "cv", number = 5)
+
+set.seed(uin)
+fit_control_oob <- trainControl(
+                           method = "oob",
+                           number = 5)
 ```
 
-# create RECIPE
+
+
+# modelling 
 ```{r}
-tree_rec <- recipe( brightness ~ . , data=trees_train) %>%
-  step_center(all_predictors()) %>%
-  step_scale(all_predictors())
-
+#xgboost
+set.seed(uin)
+fi_gbm = train(frp ~ . , data = fi_trn,
+                method = "gbm",
+                trControl = cv_5,
+                verbose = FALSE,
+                tuneGrid = gbm_fi_grid)
 ```
 
 
 
+
+# performance and testing 
 ```{r}
-nn_model <- rand_forest(trees = 10) %>%
-  set_engine("ranger") %>%
-  set_mode("regression")
-
-nn_wf <- workflow() %>%
-  add_recipe(tree_rec) %>%
-  add_model(nn_model)
-
-nn_fit <- nn_wf %>%
-  fit(trees_train)
-```
-
-
-
-
-
-```{r}
-tune_spec <- rand_forest(
-  mtry = tune(),
-  trees = 1000,
-  min_n = tune()
-) %>%
-  set_mode("regression") %>%
-  set_engine("ranger")
-```
-
-
-
-```{r}
-tune_wf <- workflow() %>%
-  add_recipe(tree_rec) %>%
-  add_model(tune_spec)
-```
-
-
-```{r}
-set.seed(234)
-trees_folds <- vfold_cv(trees_train)
-```
-
-
-
-```{r}
-set.seed(345)
-tune_res <- tune_grid(
-  tune_wf,
-  resamples = trees_folds,
-  grid = 20
-)
-
-tune_res
+df_perf_fi_gbm <- getTrainPerf(fi_gbm) %>% glimpse()
+fi_gbm_rmse_train <- df_perf_fi_gbm$TrainRMSE  
+fi_gbm_pred <- fi_gbm %>% predict(fi_tst)
+fi_gbm_rmse_test <- RMSE(fi_gbm_pred, fi_tst$frp)
 ```
 
 
@@ -385,52 +325,3 @@ tune_res
 
 
 
-
-```{r}
-
-set.seed(1234)
-SP_split <- initial_split(fire_small, prop = 0.7)
-
-SP_train <- training(SP_split)
-SP_test <- testing(SP_split)
-
-SP_rec <- recipe( brightness ~ . , data=SP_train) %>%
-  step_center(all_predictors()) %>%
-  step_scale(all_predictors())
-
-```
-
-
-
-```{r}
-model_rf <- rand_forest(mtry = tune(),trees = 100, min_n = tune()) %>%
-  set_mode("regression") %>%
-  set_engine("ranger")
-
-rf_wf <- workflow() %>%
-  add_recipe(SP_rec) %>%
-  add_model(model_rf)
-
-```
-
-
-We train a first random forest algorithm with a grid = 10, no tuning parameter and a 5 fold cross validation.
-
-```{r, message=FALSE}
-set.seed(1234)
-nfl_folds <- vfold_cv(SP_train, v = 5, strata = brightness)
-
-
-set.seed(1234)
-rf <- tune_grid(
-  rf_wf,
-  resamples = nfl_folds,
-  grid = 10
-)
-
-
-rf %>%
-  collect_metrics() %>%
-  filter(.metric == "rmse") 
-
-```
